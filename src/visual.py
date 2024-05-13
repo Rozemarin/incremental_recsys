@@ -13,6 +13,106 @@ plt.rcParams['font.size'] = 12
 plt.rcParams['savefig.format'] = 'pdf'
 sns.set_style('darkgrid')
 
+def b():
+    return
+
+def visualize_time(algorithm_metrics_dict, split_data):
+    (
+        r_periods,
+        r_total_users_items,
+        r_users_ids,
+        r_A_act,
+        r_users_actual_watched,
+        r_clean_next_portion,
+        r_dirt,
+        r_n_virtual_users,
+        r_n_real_active,
+        r_n_pure_cold,
+        training,
+        holdout
+    ) = split_data
+
+    algorithm_names = list(algorithm_metrics_dict.keys())
+
+    width = .2 # width of a bar
+
+    fig, ax_bar = plt.subplots(1, 1, figsize=(6 * 1, 5))
+
+    real_active = 'number of real active users'
+    virtual = 'number of created virtual users'
+
+    info_dict = {
+        'total_users' : [nusers for nusers, nitems in r_total_users_items[1:]],
+        'total_movies' : [nitems for nusers, nitems in r_total_users_items[1:]]
+    }
+
+    for alg_idx, algorithm_name in enumerate(ALL_ALG_NAMES):
+        if algorithm_name in algorithm_names:
+            info_dict[algorithm_name] = algorithm_metrics_dict[algorithm_name][-1][1:-1]
+
+    m1_t = pd.DataFrame(info_dict)
+
+    user_movie_colors = ['tab:olive', 'tab:pink']
+    real_virtual = ['tab:green', 'tab:gray']
+
+    m1_t[['total_users','total_movies']].plot(ax=ax_bar, kind='bar', color=user_movie_colors, secondary_y=True, legend=None, alpha=0.5, width=width)
+
+    for alg_idx, algorithm_name in enumerate(ALL_ALG_NAMES):
+        if algorithm_name not in algorithm_names:
+            continue
+        if algorithm_name == ALL_RANDOM or algorithm_name == MOST_POPULAR:
+            continue
+        elif algorithm_name == SVD:
+            linestyle = ':'
+        elif 'psi' in algorithm_name:
+            linestyle = '-.'
+        elif 'rand' in algorithm_name:
+            linestyle = '--'
+        else:
+            linestyle = '-'
+        m1_t[algorithm_name].plot(ax=ax_bar, legend=None, secondary_y=False, linestyle=linestyle, color=ALL_ALG_COLORS[algorithm_name])
+
+    ax_bar.yaxis.tick_left()
+    ax_bar.yaxis.set_label_position("left")
+
+    # x_labels = ['initial svd'] + list(range(1, len(r_periods)))
+    x_labels = list(range(1, len(r_periods)))
+    ax_bar.set_xticklabels(x_labels, rotation="horizontal")
+    ax_bar.set_xlabel('period number')
+    ax_bar.set_title('time spent for decomposition in seconds')
+    ax_bar.spines[['right', 'top']].set_visible(False)
+
+    handles_obj, labels_obj = ax_bar.get_legend_handles_labels()
+    handles_metrics, labels_metrics = plt.gca().get_legend_handles_labels()
+    handles_metrics_copy = [copy.copy(ha) for ha in handles_metrics]
+    for i, label in enumerate(labels_metrics):
+        labels_metrics[i] = label.replace(' (right)', '')
+        # handles_metrics_copy[i].set_linewidth(2)
+
+    fig.legend(handles_metrics_copy, labels_metrics, loc='lower center', ncol=len(handles_metrics), bbox_to_anchor=(0.55, 0.97))
+    fig.add_artist(fig.legend(handles_obj, labels_obj, loc='center left', ncol=1, bbox_to_anchor=(-0.25, 0.5)))
+    fig.tight_layout()
+    # return fig
+
+def visualize_relative_norm(metrics_dict, title=None, include_rsvd=True):
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+    rel_norms = {}
+    for alg, metrics in metrics_dict.items():
+        if not include_rsvd and alg == RAND_SVD:
+            continue
+        if alg not in [ALL_RANDOM, MOST_POPULAR]:
+            rel_norms[alg] = metrics[-2]
+    sns.lineplot(rel_norms, ax=ax, palette=ALL_ALG_COLORS)
+    x_labels = [''] + ['initial svd'] + list(range(1, len(metrics[-2])))
+    # x_labels = ['initial svd'] + list(range(1, len(metrics[-2])))
+    ax.set_xticklabels(x_labels, rotation="horizontal")
+    ax.set_xlabel('period number')
+    ax.set_ylabel('relative error')
+    # if title is not None:
+    #     ax.set_title(title)
+    # else:
+    #     ax.set_title('$\\frac{\| A_t - U_t S_t V^T_t \|}{\| A_t \|}$')
+
 
 def visualize_experiment_rank(alg_rank_metrics_dict, K=10, nostability=False):
     d = {metric: [] for metric in METRICS_NAMES_K(K)}
@@ -40,72 +140,212 @@ def visualize_experiment_rank(alg_rank_metrics_dict, K=10, nostability=False):
         gdf = gdf[gdf['Metric'] != METRICS_NAMES_K(K)[-1]]
 
     n_algs = len(alg_rank_metrics_dict.keys())
-    ylim = max(gdf['value']) * 1.05
-
-    fig, ax = plt.subplots(1, n_algs, figsize=(6 * n_algs, 5))
-    
-    for i, alg_name in enumerate(alg_rank_metrics_dict.keys()):
-        sns.barplot(x="Rank", y="value", hue="Metric", 
-                    data=gdf[gdf['Alg'] == alg_name],
-                    ax=ax[i])
-        ax[i].set_ylim(0, ylim)
-        ax[i].set_title(alg_name)
-        legend = ax[i].legend()
-        legend.remove()
-
-    handles_obj, labels_obj = ax[0].get_legend_handles_labels()
-    fig.legend(handles_obj, labels_obj, loc='upper center', ncol=len(handles_obj)) #, bbox_to_anchor=(0.5, 1.05))
-    
-
-
-def visualize_cummulative(alg_rank_metrics_dict, K=10):
-    d = {metric: [] for metric in METRICS_NAMES_K(K)}
-    d['Rank'] = []
-    df_big = pd.DataFrame(d)
-    for alg_name, rank_metrics_dict in alg_rank_metrics_dict.items():
-        ranks = list(rank_metrics_dict.keys())
-        dfm = pd.DataFrame(
-            rank_metrics_dict[ranks[0]][0][:, 1:].T, 
-            columns=METRICS_NAMES_K(K)).assign(Rank=ranks[0]).assign(Alg=alg_name)
-        for rank in ranks[1:]:
-            dfm = pd.concat([
-                dfm, 
-                pd.DataFrame(rank_metrics_dict[rank][0][:, 1:].T, columns=METRICS_NAMES_K(K)).assign(Rank=rank).assign(Alg=alg_name)
-            ])
-        df_big = pd.concat([df_big, dfm])
-    mdf = pd.melt(df_big, id_vars=['Alg', 'Rank'], var_name='Metric') 
-    mdf['Rank'] = mdf['Rank'].astype(int)
-    gdf = mdf.groupby(['Alg', 'Rank', 'Metric'], as_index=False).sum()
-    gdf['Alg'] = pd.Categorical(gdf['Alg'], list(metrics_dict.keys()))
-    gdf = gdf.sort_values("Alg")
+    # ylim = max(gdf['value']) * 1.05
 
     fig, ax = plt.subplots(1, N_METRICS, figsize=(6 * N_METRICS, 5))
+    
+    # for i, alg_name in enumerate(alg_rank_metrics_dict.keys()):
+    #     sns.barplot(x="Rank", y="value", hue="Metric", 
+    #                 data=gdf[gdf['Alg'] == alg_name],
+    #                 ax=ax[i])
+    #     ax[i].set_ylim(0, ylim)
+    #     ax[i].set_title(alg_name)
+    #     legend = ax[i].legend()
+    #     legend.remove()
+
     for i, metric_name in enumerate(METRICS_NAMES_K(K)):
         sns.barplot(x="Rank", y="value", hue="Alg", 
                     data=gdf[gdf['Metric'] == metric_name],
                     ax=ax[i])
+        # ax[i].set_ylim(0, ylim)
         ax[i].set_title(metric_name)
-        legend = ax[i].legend()
-        legend.remove()
+        # legend = ax[i].legend()
+        # legend.remove()
 
     handles_obj, labels_obj = ax[0].get_legend_handles_labels()
     fig.legend(handles_obj, labels_obj, loc='upper center', ncol=len(handles_obj)) #, bbox_to_anchor=(0.5, 1.05))
     
 
+def get_mdf(alg_rank_metrics_dict, K=10, validation=False):
+    if validation:
+        start_idx = 0
+    else:
+        start_idx = 1
 
-def visualize_boxplots(alg_rank_metrics_dict, K=10):
+    d = {metric: [] for metric in METRICS_NAMES_K(K)}
+    d['Rank'] = []
+    df_big = pd.DataFrame(d)
+    for alg_name, rank_metrics_dict in alg_rank_metrics_dict.items():
+        if alg_name in [ALL_RANDOM, MOST_POPULAR]:
+            continue
+        if type(rank_metrics_dict) == type({}):
+            ranks = list(rank_metrics_dict.keys())
+        else:
+            rank_metrics_dict = [rank_metrics_dict]
+            ranks = [0]
+        dfm = pd.DataFrame(
+            rank_metrics_dict[ranks[0]][0][:, start_idx:].T, 
+            columns=METRICS_NAMES_K(K)).assign(Rank=ranks[0]).assign(Alg=alg_name)
+        for rank in ranks[1:]:
+            dfm = pd.concat([
+                dfm, 
+                pd.DataFrame(rank_metrics_dict[rank][0][:, start_idx:].T, columns=METRICS_NAMES_K(K)).assign(Rank=rank).assign(Alg=alg_name)
+            ])
+        df_big = pd.concat([df_big, dfm])
+    # mdf = pd.melt(df_big, id_vars=['Alg', 'Rank'], var_name='Metric') 
+    # mdf['Rank'] = mdf['Rank'].astype(int)
+    return df_big
+    # gdf = mdf.groupby(['Alg', 'Rank', 'Metric'], as_index=False).sum()
+    # return gdf
+
+
+def visualize_for_pdf(bdf, K=10):
+    sum_df = bdf.loc[:, ~bdf.columns.isin(['period', 'init_alg'])].groupby(['Alg', 'id_run', 'Rank']).sum().reset_index()
+    sum_metrics_df = sum_df.loc[:, ~sum_df.columns.isin(['id_run', 'releps', 'seconds'])]
+    gdf = pd.melt(sum_metrics_df, id_vars=['Alg', 'Rank'], var_name='Metric') 
+    allalgnames = [ x for x in ALL_ALG_NAMES[:-2] if not (("ort" in x) and ("reused" in x))] 
+    gdf = gdf[gdf['Alg'].isin(allalgnames)]
+
+    gdf['Alg'] = pd.Categorical(gdf['Alg'], allalgnames)
+    gdf = gdf.sort_values("Alg")
+    
+    fig, ax = plt.subplots(1, 2, figsize=(6 * 2, 5))
+    for i, metric_name in enumerate(['NDCG@10', 'stability@10']):
+        axi = ax[i]
+        sns.barplot(x="Rank", y="value", hue="Alg", 
+                    data=gdf[gdf['Metric'] == metric_name],
+                    ax=axi,
+                    palette=ALL_ALG_COLORS)
+        axi.set_ylabel('')
+        axi.set_title(metric_name, fontsize=14)
+        legend = axi.legend()
+        legend.remove()
+        for label in (axi.get_xticklabels() + axi.get_yticklabels()):
+            label.set_fontsize(12)
+        axi.axes.get_xaxis().set_visible(False)
+
+    # ax[-1].set_visible(False)
+    handles_obj, labels_obj = ax[0].get_legend_handles_labels()
+    fig.legend(handles_obj, labels_obj, ncol=1, bbox_to_anchor=(1.25, 1.0), prop={'size': 14})
+    plt.tight_layout()
+    return gdf
+
+def visualize_small_cummulative(bdf, K=10):
+
+    sum_df = bdf.loc[:, ~bdf.columns.isin(['period', 'init_alg'])].groupby(['Alg', 'id_run', 'Rank']).sum().reset_index()
+    sum_metrics_df = sum_df.loc[:, ~sum_df.columns.isin(['id_run', 'releps', 'seconds'])]
+    gdf = pd.melt(sum_metrics_df, id_vars=['Alg', 'Rank'], var_name='Metric') 
+    allalgnames = [ x for x in ALL_ALG_NAMES[:-2] if not (("ort" in x) and ("reused" in x))] 
+    gdf = gdf[gdf['Alg'].isin(allalgnames)]
+
+    gdf['Alg'] = pd.Categorical(gdf['Alg'], allalgnames)
+    gdf = gdf.sort_values("Alg")
+    
+    fig, ax = plt.subplots(1, 2, figsize=(6 * 2, 5))
+    for i, metric_name in enumerate(['NDCG@10', 'stability@10']):
+        axi = ax[i]
+        sns.barplot(x="Rank", y="value", hue="Alg", 
+                    data=gdf[gdf['Metric'] == metric_name],
+                    ax=axi,
+                    palette=ALL_ALG_COLORS)
+        axi.set_ylabel('')
+        axi.set_title(metric_name, fontsize=14)
+        legend = axi.legend()
+        legend.remove()
+        for label in (axi.get_xticklabels() + axi.get_yticklabels()):
+            label.set_fontsize(12)
+        axi.axes.get_xaxis().set_visible(False)
+
+    # ax[-1].set_visible(False)
+    handles_obj, labels_obj = ax[0].get_legend_handles_labels()
+    fig.legend(handles_obj, labels_obj, ncol=1, bbox_to_anchor=(1.25, 1.0), prop={'size': 14})
+    plt.tight_layout()
+    return gdf
+
+
+def visualize_cummulative(bdf, K=10, validation=False):
+
+    if validation:
+        gdf = pd.melt(bdf.loc[:, ~bdf.columns.isin(['id_run', 'seconds', 'releps', 'init_alg'])], id_vars=['Alg', 'Rank'], var_name='Metric')
+        allalgnames = [SVD, RAND_SVD_P1, RAND_SVD_P2, RAND_SVD_P3]
+        # allalgnames = [SVD, RAND_SVD, RAND_SVD_P1, RAND_SVD_P2]
+    else:
+        sum_df = bdf.loc[:, ~bdf.columns.isin(['period', 'init_alg'])].groupby(['Alg', 'id_run', 'Rank']).sum().reset_index()
+        sum_metrics_df = sum_df.loc[:, ~sum_df.columns.isin(['id_run', 'releps', 'seconds'])]
+        gdf = pd.melt(sum_metrics_df, id_vars=['Alg', 'Rank'], var_name='Metric') 
+        allalgnames = [ x for x in ALL_ALG_NAMES[:-2] if not (("ort" in x) and ("reused" in x))] 
+        gdf = gdf[gdf['Alg'].isin(allalgnames)]
+
+    gdf['Alg'] = pd.Categorical(gdf['Alg'], allalgnames)
+    gdf = gdf.sort_values("Alg")
+
+    if validation:
+        fig, ax = plt.subplots(2, 2, figsize=(5 * (N_METRICS - 1), 13))
+        for i, metric_name in enumerate(METRICS_NAMES_K(K)[:-1]):
+            if i <= 1:
+                axi = ax[0][i]
+            else:
+                axi = ax[1][i % 2]
+            sns.barplot(x="Rank", y="value", hue="Alg", 
+                        data=gdf[gdf['Metric'] == metric_name],
+                        ax=axi,
+                        palette=ALL_ALG_COLORS)
+            axi.set_title(metric_name)
+            legend = axi.legend()
+            legend.remove()
+            axi.set_ylabel('')
+            axi.set_xlabel('rank', fontsize=12)
+            axi.set_title(metric_name, fontsize=14)
+            for label in (axi.get_xticklabels() + axi.get_yticklabels()):
+                label.set_fontsize(12)
+        handles_obj, labels_obj = axi.get_legend_handles_labels()
+        fig.legend(handles_obj, labels_obj, loc='upper center', ncol=len(handles_obj), prop={'size': 16}, bbox_to_anchor=(0.5, 1.02))
+        plt.tight_layout()
+        return
+    
+    fig, ax = plt.subplots(2, 3, figsize=(6 * 3, 5 * 2))
+    for i, metric_name in enumerate(METRICS_NAMES_K(K)):
+        if i <= 2:
+            axi = ax[0][i]
+        else:
+            axi = ax[1][i % 3]
+        sns.barplot(x="Rank", y="value", hue="Alg", 
+                    data=gdf[gdf['Metric'] == metric_name],
+                    ax=axi,
+                    palette=ALL_ALG_COLORS)
+        axi.set_ylabel('')
+        axi.set_title(metric_name, fontsize=14)
+        legend = axi.legend()
+        legend.remove()
+        for label in (axi.get_xticklabels() + axi.get_yticklabels()):
+            label.set_fontsize(12)
+        axi.axes.get_xaxis().set_visible(False)
+
+    ax[-1][-1].set_visible(False)
+    handles_obj, labels_obj = ax[0][0].get_legend_handles_labels()
+    fig.legend(handles_obj, labels_obj, ncol=1, bbox_to_anchor=(0.94, 0.5), prop={'size': 16})
+    plt.tight_layout()
+    return gdf
+
+
+def visualize_boxplots(alg_rank_metrics_dict, K=10, validation=True):
+    if validation:
+        start_idx = 0
+    else:
+        start_idx = 1
+
     d = {metric: [] for metric in METRICS_NAMES_K(K)}
     d['Rank'] = []
     df_big = pd.DataFrame(d)
     for alg_name, rank_metrics_dict in alg_rank_metrics_dict.items():
         ranks = list(rank_metrics_dict.keys())
         dfm = pd.DataFrame(
-            rank_metrics_dict[ranks[0]][0][:, 1:].T, 
+            rank_metrics_dict[ranks[0]][0][:, start_idx:].T, 
             columns=METRICS_NAMES_K(K)).assign(Rank=ranks[0]).assign(Alg=alg_name)
         for rank in ranks[1:]:
             dfm = pd.concat([
                 dfm, 
-                pd.DataFrame(rank_metrics_dict[rank][0][:, 1:].T, columns=METRICS_NAMES_K(K)).assign(Rank=rank).assign(Alg=alg_name)
+                pd.DataFrame(rank_metrics_dict[rank][0][:, start_idx:].T, columns=METRICS_NAMES_K(K)).assign(Rank=rank).assign(Alg=alg_name)
             ])
         df_big = pd.concat([df_big, dfm])
     mdf = pd.melt(df_big, id_vars=['Alg', 'Rank'], var_name='Metric') 
@@ -114,8 +354,15 @@ def visualize_boxplots(alg_rank_metrics_dict, K=10):
     for i, metric_name in enumerate(METRICS_NAMES_K(K)):
         sns.boxplot(x="Rank", y="value", hue="Alg", 
                     data=mdf[mdf['Metric'] == metric_name],
-                    ax=ax[i])
+                    ax=ax[i],
+                    palette=ALL_ALG_COLORS)
+        legend = ax[i].legend()
+        legend.remove()
         ax[i].set_title(metric_name)
+    
+    handles_obj, labels_obj = ax[0].get_legend_handles_labels()
+    fig.legend(handles_obj, labels_obj, loc='upper center', ncol=len(handles_obj)) #, bbox_to_anchor=(0.5, 1.05))
+    
 
 
 def visualize_split_metrics(algorithm_name, metrics, K=10):
@@ -182,7 +429,9 @@ def visualize_all(algorithm_metrics_dict, K, split_data):
         r_dirt,
         r_n_virtual_users,
         r_n_real_active,
-        r_n_pure_cold
+        r_n_pure_cold,
+        training,
+        holdout
     ) = split_data
 
     algorithm_names = list(algorithm_metrics_dict.keys())
@@ -239,7 +488,7 @@ def visualize_all(algorithm_metrics_dict, K, split_data):
                 linestyle = '--'
             else:
                 linestyle = '-'
-            m1_t[algorithm_name].plot(ax=ax_bar[metric_idx], legend=None, secondary_y=False, linestyle=linestyle)
+            m1_t[algorithm_name].plot(ax=ax_bar[metric_idx], legend=None, secondary_y=False, linestyle=linestyle, color=ALL_ALG_COLORS[algorithm_name])
 
         ax_bar[metric_idx].yaxis.tick_left()
         ax_bar[metric_idx].yaxis.set_label_position("left")

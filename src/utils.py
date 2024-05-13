@@ -2,21 +2,28 @@ import scipy
 import numpy as np
 import pandas as pd
 import copy
+from src.names import *
 
 
-def delete_low_and_binarize(df):
-    new_df = copy.copy(df[(df['rating'] == 4) | (df['rating'] == 5)])
-    new_df['rating'] = 1
+def delete_low_and_binarize(df, delete_low=False):
+    new_df = df.copy()
+    if delete_low == True:
+        new_df = new_df[(new_df[RATING] == 4) | (new_df[RATING] == 5)]
+    new_df[RATING] = 1
     return new_df
 
 
-def get_matrix(df, total_users, total_movies):
-    assert max(df['userid']) < total_users
-    assert max(df['movieid']) < total_movies
-    matrix = df.pivot(index = 'userid', columns ='movieid', values = 'rating').fillna(0)
-    matrix = matrix.reindex(columns=range(0, total_movies), fill_value=0)
-    matrix = matrix.reindex(index=range(0, total_users), fill_value=0)
-    return scipy.sparse.csr_matrix(matrix.values)
+def get_matrix(df, total_users, total_items):
+    if total_users is None and total_items is None:
+        total_users = max(df[USERID]) + 1
+        total_items = max(df[ITEMID]) + 1
+    assert max(df[USERID]) < total_users
+    assert max(df[ITEMID]) < total_items
+    return scipy.sparse.coo_matrix(
+        (df[RATING], (df[USERID], df[ITEMID])), 
+        shape=(total_users, total_items),
+        dtype=np.float32
+        ).tocsr()
 
 
 def get_unique_recomendations(predicted, K):
@@ -54,7 +61,7 @@ def calculate_stability(predictions1, ids1, predictions2, ids2):
     return sim / len(cut_predictions1)
 
 
-def calculate_metrics(K, predicted, actual, total_movies, cur_predictions,
+def calculate_metrics(K, predicted, actual, total_items, cur_predictions,
                     cur_ids,
                     prev_predictions,
                     prev_ids, n_test_users=None):
@@ -65,12 +72,16 @@ def calculate_metrics(K, predicted, actual, total_movies, cur_predictions,
     # HR calculation
     hr = np.sum(hits_mask.any(axis=1)) / n_test_users
     # hr = np.mean(hits_mask.any(axis=1))
+
     # MRR calculation
     hit_rank = np.where(hits_mask)[1] + 1.0
-
     mrr = np.sum(1 / hit_rank) / n_test_users
+
+    # NDCG calculation
+    ndcg = np.sum(1 / np.log2(hit_rank + 1)) / n_test_users
+
     # Coverage calculation
-    coverage = len(get_unique_recomendations(predicted[:, :K], K)) / total_movies
+    coverage = len(get_unique_recomendations(predicted[:, :K], K)) / total_items
 
     # Stability calculation
     stabitily = 0.
@@ -82,28 +93,28 @@ def calculate_metrics(K, predicted, actual, total_movies, cur_predictions,
             prev_ids
         )
 
-    return hr, mrr, coverage, stabitily
+    return hr, mrr, ndcg, coverage, stabitily
 
 
 def create_virtual_users(A, next_portion):
     A_copy = A.copy()
     A_total = None
     users_actual_watched_total = None
-    next_portion = next_portion.sort_values(by=['userid', 'timestamp', 'movieid'])   
+    next_portion = next_portion.sort_values(by=[USERID, TIMESTAMP, ITEMID])   
     all_user_ids = np.array([])
 
     i = 0
     while len(next_portion) > 0:
-        if i % 50 == 0:
+        if i % 100 == 0:
             print('iter', i)
         i += 1
 
-        test_user_x_first_item = next_portion.groupby('userid').head(1).sort_values(by=['userid'])
-        users_ids = test_user_x_first_item['userid']
+        test_user_x_first_item = next_portion.groupby(USERID).head(1).sort_values(by=[USERID])
+        users_ids = test_user_x_first_item[USERID]
         all_user_ids = np.concatenate([all_user_ids, users_ids])
 
         A_act = A_copy[users_ids]
-        users_actual_watched = test_user_x_first_item['movieid'].to_numpy().reshape(-1, 1)
+        users_actual_watched = test_user_x_first_item[ITEMID].to_numpy().reshape(-1, 1)
 
         if A_total is None:
             A_total = A_act.copy()
@@ -115,21 +126,21 @@ def create_virtual_users(A, next_portion):
         matrix_update = get_matrix(test_user_x_first_item, A_copy.shape[0], A_copy.shape[1])
         A_copy += matrix_update
         
-        next_portion = next_portion[next_portion.groupby('userid').cumcount() != 0]
+        next_portion = next_portion[next_portion.groupby(USERID).cumcount() != 0]
 
     return A_total, users_actual_watched_total, all_user_ids
 
 
-def collect_dirt(next_portion, total_users, total_movies, userid = 'userid', movieid='movieid'):
+def collect_dirt(next_portion, total_users, total_items, userid = USERID, itemid=ITEMID):
     clean = next_portion[(next_portion[userid] < total_users)
-                                & (next_portion[movieid] < total_movies)]
+                                & (next_portion[itemid] < total_items)]
     dirt = next_portion[(next_portion[userid] >= total_users) 
-                                | (next_portion[movieid] >= total_movies)]
+                                | (next_portion[itemid] >= total_items)]
     assert (clean.shape[0] + dirt.shape[0]) == next_portion.shape[0]
     return clean, dirt
 
 
-def half_time_split(portion, timeid='timestamp'):
+def half_time_split(portion, timeid=TIMESTAMP):
     min_time = np.min(portion[timeid])
     max_time = np.max(portion[timeid])
     interval = (max_time - min_time) / 2
@@ -167,70 +178,3 @@ def pure_cold_svd_update(U, S, Vt, cold_ui_matrix, r):
     Vt = np.concatenate((Vt, Vt_small), axis=1)
     
     return U, S, Vt
-
-
-def reorthogonalization(Q, tol=1e-14):
-    if np.abs(Q[:, -1].T @ Q[:, -1]) > tol:
-        for i in range(Q.shape[1]):
-            alpha = Q[:, i]
-            for j in range(i - 1):
-                mult = alpha.T @ Q[:, j]
-                Q[:, i] -= (Q[:, j].reshape(-1, 1) * mult).reshape(Q[:, i].shape)
-            norm = np.linalg.norm(Q[:, i])
-            Q[:, i] /= norm
-    return Q
-
-
-def matthew_brand(C, U, S, Vt, r, update_rows=False, tol=1e-14):
-    '''
-    C - columns to edit
-    '''
-
-    if update_rows:
-        C = C.T
-        U, S, Vt = Vt.T, S, U.T
-    if len(S.shape) == 1:
-        S = np.diag(S)
-    V = Vt.T
-
-    L = U.T @ C
-    H = C - U @ L
-    J, K = np.linalg.qr(H)
-
-    flag_truncation = False
-    null = np.zeros(shape=(K.shape[0], S.shape[1]))
-    Q = np.block([
-        [S, U.T @ C],
-        [null, K]
-    ])
-    
-    U_q, S_q, V_qt = np.linalg.svd(Q, full_matrices=False)
-    V_q = V_qt.T
-
-    if flag_truncation:
-        U = U @ U_q[:r, :r]
-    else:
-        U = np.block([[U, J]]) @ U_q
-
-        null_ur = np.zeros(shape=(V.shape[0], V_q.shape[0] - V.shape[1]))
-        null_bl = np.zeros(shape=(C.shape[1], V.shape[1]))
-        eye = np.eye(C.shape[1], V_q.shape[0] - V.shape[1])
-        V = np.block([
-            [V, null_ur],
-            [null_bl, eye]
-        ])
-        V = V @ V_q
-
-    U = U[:, :r]
-    S = S_q[:r]
-    Vt = V[:, :r].T
-
-    U = reorthogonalization(U, tol)
-    
-    if update_rows:
-        U, S, Vt = Vt.T, S, U.T
-        
-    return np.asarray(U), np.asarray(S), np.asarray(Vt)
-
-def load_metrics(path, algorithm_name):
-    pass

@@ -3,13 +3,58 @@ from src.names import *
 from src.utils import *
 from tqdm import tqdm
 
-def time_split(data, checkpoint, userid='userid', movieid='movieid', timeid='timestamp'):
+
+def print_datasets_stats(df):
+    print(f"# interactions: {df.shape[0]}")
+    print(f"# users: {len(np.unique(df[USERID]))}")
+    print(f"# items: {len(np.unique(df[ITEMID]))}")
+    A = get_matrix(df, total_items=None, total_users=None)
+    print(f"density: {(A.getnnz() / np.prod(A.shape)) * 100:.4f}%")
+
+
+def remap_and_split(df, split_type, frac_train):
+    # checkpoint = max(data['timestamp']) - dateutil.relativedelta.relativedelta(months=8)
+    # training_, holdout_ = data[data['timestamp'] < checkpoint], data[data['timestamp'] >= checkpoint]
+    checkpoint = int(len(df) * frac_train)
+    training_, holdout_ = df[:checkpoint], df[checkpoint:]
+    print(f"split type: {split_type}")
+    print(f"checkpoing:", checkpoint)
+
+    # чистим данные под вид сплита
+    training, holdout = configure_split_type(training_, holdout_, type=split_type)
+    assert training_.shape == training.shape
+    clean_data = pd.concat([training, holdout])
+
+    print(f"training.shape: {training.shape}")
+    print(f"holdout.shape: {holdout.shape}")
+
+    # делаем сквозные возрастающие айди для пользователей
+    global_mapping_userid = update_mapping(clean_data, USERID)
+    clean_data[USERID] = clean_data[USERID].map(global_mapping_userid)
+
+    # делаем сквозные возрастающие айди для айтемов
+    global_mapping_itemid = update_mapping(clean_data, ITEMID)
+    clean_data[ITEMID] = clean_data[ITEMID].map(global_mapping_itemid) 
+
+    print_datasets_stats(clean_data)
+
+    # обратно делим на трейн и тест
+    split_idx = training.shape[0]
+    training, holdout = clean_data[:split_idx], clean_data[split_idx:]
+    assert training_.shape == training.shape
+
+    print(f"train %: {(training.shape[0]/(holdout.shape[0] + training.shape[0])) * 100}%")
+
+    return training, holdout
+
+
+def time_split(data, checkpoint, userid=USERID, movieid=ITEMID, timeid=TIMESTAMP):
     holdout = data[data[timeid] >= checkpoint]
     remaining = data[data[timeid] < checkpoint]
     return remaining, holdout, checkpoint
 
 
-def interaction_split(data, n_interactions_in_period, userid='userid', movieid='movieid', timeid='timestamp'):
+def interaction_split(data, n_interactions_in_period, userid=USERID, movieid=ITEMID, timeid=TIMESTAMP):
     assert len(data) >= n_interactions_in_period
     holdout = data[n_interactions_in_period:]
     remaining = data[:n_interactions_in_period]
@@ -18,7 +63,7 @@ def interaction_split(data, n_interactions_in_period, userid='userid', movieid='
     return remaining, holdout, max(remaining[timeid])
 
 
-# def active_users_split(data, n_active_users_in_period, userid='userid', movieid='movieid', timeid='timestamp'):
+# def active_users_split(data, n_active_users_in_period, userid=USERID, movieid=ITEMID, timeid=TIMESTAMP):
 #     assert len(np.unique(data[userid])) > n_active_users_in_period
 #     first_extra_user_id = np.unique(data[userid])[n_active_users_in_period]
 #     split_index = (data[userid].values == first_extra_user_id).argmax()
@@ -27,7 +72,7 @@ def interaction_split(data, n_interactions_in_period, userid='userid', movieid='
 #     return remaining, holdout, min(holdout[timeid])
 
 
-def configure_split_type(train, test, type, userid='userid', movieid='movieid', timeid='timestamp'):
+def configure_split_type(train, test, type, userid=USERID, movieid=ITEMID, timeid=TIMESTAMP):
     """
     type 0: hot users, hot items
     type 1: hot users + cold users, hot items
@@ -50,9 +95,9 @@ def configure_split_type(train, test, type, userid='userid', movieid='movieid', 
 
 def prepare_split(training, holdout, n_periods, flag_virtual, periods_split_type, n_active_users_in_period=None):
     
-    split_date = min(holdout['timestamp'])
+    split_date = min(holdout[TIMESTAMP])
     if periods_split_type == TIME_SPLIT:
-        interval = (max(holdout['timestamp']) - split_date) / (n_periods + 1)
+        interval = (max(holdout[TIMESTAMP]) - split_date) / (n_periods + 1)
         periods = [split_date + i * interval for i in range(1, n_periods + 2)]
     elif periods_split_type == ACTIVE_USERS_SPLIT:
         assert n_active_users_in_period is not None
@@ -81,8 +126,8 @@ def prepare_split(training, holdout, n_periods, flag_virtual, periods_split_type
     r_n_pure_cold = []
     for i in tqdm(range(1, n_periods + 2)):
 
-        total_users = len(updated_training['userid'].unique())
-        total_movies = len(updated_training['movieid'].unique())
+        total_users = len(updated_training[USERID].unique())
+        total_movies = len(updated_training[ITEMID].unique())
         ######
         r_total_users_items.append((total_users, total_movies))
         ######
@@ -110,16 +155,16 @@ def prepare_split(training, holdout, n_periods, flag_virtual, periods_split_type
         if flag_virtual:
             A_act, users_actual_watched, users_ids = create_virtual_users(A, next_portion)
         else:
-            test_user_x_first_item = next_portion.groupby('userid').head(1).sort_values(by=['userid'])
-            users_ids = test_user_x_first_item['userid']
+            test_user_x_first_item = next_portion.groupby(USERID).head(1).sort_values(by=[USERID])
+            users_ids = test_user_x_first_item[USERID]
             A_act = A[users_ids]
-            users_actual_watched = test_user_x_first_item['movieid'].to_numpy().reshape(-1, 1)
+            users_actual_watched = test_user_x_first_item[ITEMID].to_numpy().reshape(-1, 1)
 
         #############
         r_users_ids.append(users_ids)
         r_A_act.append(A_act)
         r_users_actual_watched.append(users_actual_watched)
-        r_n_real_active.append(len(np.unique(next_portion['userid'])))
+        r_n_real_active.append(len(np.unique(next_portion[USERID])))
         r_n_virtual_users.append(A_act.shape[0] - r_n_real_active[-1])
         #############
 
@@ -131,8 +176,8 @@ def prepare_split(training, holdout, n_periods, flag_virtual, periods_split_type
             continue
 
         n_pure_cold = len(dirt[
-            (dirt['userid'] > total_users)
-            & (dirt['movieid'] > total_movies)
+            (dirt[USERID] > total_users)
+            & (dirt[ITEMID] > total_movies)
         ])
         #############
         r_n_pure_cold.append(n_pure_cold)
@@ -146,15 +191,17 @@ def prepare_split(training, holdout, n_periods, flag_virtual, periods_split_type
     y = holdout.shape[0]
     assert x == y
 
-    return (
-        r_periods,
-        r_total_users_items,
-        r_users_ids,
-        r_A_act,
-        r_users_actual_watched,
-        r_clean_next_portion,
-        r_dirt,
-        r_n_virtual_users,
-        r_n_real_active,
-        r_n_pure_cold
-    )
+    data = ExperimentData(r_periods,
+                            r_total_users_items,
+                            r_users_ids,
+                            r_A_act,
+                            r_users_actual_watched,
+                            r_clean_next_portion,
+                            r_dirt,
+                            r_n_virtual_users,
+                            r_n_real_active,
+                            r_n_pure_cold,
+                            training,
+                            holdout)
+
+    return data
